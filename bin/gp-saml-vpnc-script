@@ -1,0 +1,47 @@
+#!/bin/sh
+
+set -eu
+
+REAL_VPNC_SCRIPT="/opt/homebrew/etc/vpnc/vpnc-script"
+
+active_network_service() {
+    active_interface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"
+    if [ -z "${active_interface:-}" ]; then
+        return 1
+    fi
+
+    /usr/sbin/networksetup -listnetworkserviceorder | awk -v iface="$active_interface" '
+        previous && $0 ~ "Device: " iface "\\)" {
+            sub(/^[[:space:]]*\([0-9]+\)[[:space:]]*/, "", previous)
+            print previous
+            exit
+        }
+        { previous = $0 }
+    '
+}
+
+apply_dns_fallback() {
+    service="$(active_network_service || true)"
+    if [ -n "${service:-}" ] && [ -n "${INTERNAL_IP4_DNS:-}" ]; then
+        /usr/sbin/networksetup -setdnsservers "$service" ${INTERNAL_IP4_DNS} >/dev/null 2>&1 || true
+    fi
+}
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    if [ "${INTERNAL_IP4_NETMASKLEN:-}" = "32" ] || [ "${INTERNAL_IP4_NETMASK:-}" = "255.255.255.255" ]; then
+        unset INTERNAL_IP4_NETADDR INTERNAL_IP4_NETMASK INTERNAL_IP4_NETMASKLEN
+    fi
+fi
+
+"$REAL_VPNC_SCRIPT" "$@"
+status=$?
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    case "${reason:-}" in
+        connect|reconnect|attempt-reconnect)
+            apply_dns_fallback
+            ;;
+    esac
+fi
+
+exit "$status"

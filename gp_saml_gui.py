@@ -28,6 +28,7 @@ if gi is None and webview is None:
     raise ImportError("Either gi (PyGObject), pgi (obsolete) module, or pywebview is required.")
 
 import argparse
+import subprocess
 import threading
 import time
 import urllib3
@@ -56,7 +57,64 @@ class CommentHtmlParser(HTMLParser):
         self.comments.append(data)
 
 
-COOKIE_FIELDS = ('prelogin-cookie', 'portal-userauthcookie')
+COOKIE_FIELDS = ('prelogin-cookie', 'portal-userauthcookie', 'portal-prelogonuserauthcookie')
+COOKIE_FIELD_PATTERN = '|'.join(re.escape(name) for name in COOKIE_FIELDS)
+COOKIE_INTERFACE_HINTS = {
+    'prelogin-cookie': 'gateway',
+    'portal-userauthcookie': 'portal',
+    'portal-prelogonuserauthcookie': 'portal',
+}
+
+
+def format_openconnect_command(cookie, openconnect_args, launcher='sudo'):
+    launcher_prefix = launcher + ' ' if launcher else ''
+    return '''    echo {} |\n        {}openconnect {}'''.format(
+        quote(cookie), launcher_prefix, ' '.join(map(quote, openconnect_args)))
+
+
+def format_test_login_command(user, clientos, server, endpoint, cookie_name, cookie_value):
+    return ("    test-globalprotect-login.py --user={} --clientos={} -p '' \\\n"
+            "         https://{}/{} {}={}\n").format(
+        quote(user), quote(clientos), quote(server), quote(endpoint), quote(cookie_name), quote(cookie_value))
+
+
+def build_openconnect_args(args, username, server, urlpath):
+    openconnect_args = [
+        '--protocol=gp',
+        '--user=' + username,
+        '--os=' + args.ocos,
+        '--usergroup=' + urlpath,
+        '--passwd-on-stdin',
+        server,
+    ] + args.openconnect_extra
+
+    if args.insecure:
+        openconnect_args.insert(1, '--allow-insecure-crypto')
+    if args.user_agent:
+        openconnect_args.insert(1, '--useragent=' + args.user_agent)
+    if args.cert:
+        cert, key = args.cert
+        if key:
+            openconnect_args.insert(1, '--sslkey=' + key)
+        openconnect_args.insert(1, '--certificate=' + cert)
+    if args.no_proxy:
+        openconnect_args.insert(1, '--no-proxy')
+
+    return openconnect_args
+
+
+def build_exec_command(exec_mode, openconnect_args):
+    cmd = ['openconnect'] + openconnect_args
+    if exec_mode == 'pkexec':
+        return ['pkexec', '--user', 'root'] + cmd
+    if exec_mode == 'sudo':
+        return ['sudo'] + cmd
+    return cmd
+
+
+def format_exec_command(exec_mode, cookie, openconnect_args):
+    launcher = {'pkexec': 'pkexec --user root', 'sudo': 'sudo', 'exec': ''}[exec_mode]
+    return format_openconnect_command(cookie, openconnect_args, launcher)
 
 
 class SAMLLoginViewWebview:
@@ -121,7 +179,7 @@ class SAMLLoginViewWebview:
         #     <saml-username>{{USERNAME}}</saml-username>
         #     <saml-slo>{{SLO}}</saml-slo>
         fd = {}
-        for m in re.finditer('<(?P<header>saml-.+?|(?:prelogin-|portal-userauth)cookie)>(?P<value>.*?)</(?P=header)>', html):
+        for m in re.finditer(r'<(?P<header>saml-.+?|{})>(?P<value>.*?)</(?P=header)>'.format(COOKIE_FIELD_PATTERN), html):
             fd[m.group('header')] = m.group('value')
         if not fd:
             self.lock.release()
@@ -138,7 +196,7 @@ class SAMLLoginViewWebview:
     def check_done(self):
         self.lock.acquire()
         d = self.saml_result
-        if 'saml-username' in d and ('prelogin-cookie' in d or 'portal-userauthcookie' in d):
+        if 'saml-username' in d and any(name in d for name in COOKIE_FIELDS):
             if self.verbose:
                 print("[SAML   ] Got all required SAML headers, done.", file=stderr)
             self.success = True
@@ -299,7 +357,7 @@ class SAMLLoginView:
 
     def check_done(self):
         d = self.saml_result
-        if 'saml-username' in d and ('prelogin-cookie' in d or 'portal-userauthcookie' in d):
+        if 'saml-username' in d and any(name in d for name in COOKIE_FIELDS):
             if self.verbose:
                 print("[SAML   ] Got all required SAML headers, done.", file=stderr)
             self.success = True
@@ -505,38 +563,30 @@ def main(args = None):
     else:
         server = slv.saml_result.get('server', args.server)
 
-    for cn, ifh in (('prelogin-cookie','gateway'), ('portal-userauthcookie','portal')):
+    for cn in COOKIE_FIELDS:
         cv = slv.saml_result.get(cn)
         if cv:
             break
     else:
-        cn = ifh = None
+        cn = None
         p.error("Didn't get an expected cookie. Something went wrong.")
 
-    urlpath = args.interface + ":" + cn
-    openconnect_args = [
-        "--protocol=gp",
-        "--user="+un,
-        "--os="+args.ocos,
-        "--usergroup="+urlpath,
-        "--passwd-on-stdin",
-        server
-    ] + args.openconnect_extra
+    cookie_interface = COOKIE_INTERFACE_HINTS.get(cn, args.interface)
+    interface_attempts = [args.interface]
+    if cookie_interface not in interface_attempts:
+        interface_attempts.append(cookie_interface)
 
-    if args.insecure:
-        openconnect_args.insert(1, "--allow-insecure-crypto")
-    if args.user_agent:
-        openconnect_args.insert(1, "--useragent="+args.user_agent)
-    if args.cert:
-        cert, key = args.cert
-        if key:
-            openconnect_args.insert(1, "--sslkey="+key)
-        openconnect_args.insert(1, "--certificate="+cert)
-    if args.no_proxy:
-        openconnect_args.insert(1, "--no-proxy")
-
-    openconnect_command = '''    echo {} |\n        sudo openconnect {}'''.format(
-        quote(cv), " ".join(map(quote, openconnect_args)))
+    attempts = []
+    for interface in interface_attempts:
+        urlpath = interface + ':' + cn
+        openconnect_args = build_openconnect_args(args, un, server, urlpath)
+        attempts.append({
+            'interface': interface,
+            'urlpath': urlpath,
+            'openconnect_args': openconnect_args,
+            'manual_command': format_openconnect_command(cv, openconnect_args),
+            'test_command': format_test_login_command(un, args.clientos, server, if2auth[interface], cn, cv),
+        })
 
     if args.verbose:
         # Warn about ambiguities
@@ -549,39 +599,64 @@ def main(args = None):
             else:
                 print('''IMPORTANT: During the SAML auth, you were redirected from {0} to {1}, however the '''
                       '''redirection was ignored because you specified --ignore-redirects.\n'''.format(args.server, server), file=stderr)
-        if ifh != args.interface and not args.uri:
+        if cookie_interface != args.interface and not args.uri:
             print('''IMPORTANT: We started with SAML auth to the {} interface, but received a cookie '''
-                  '''that's often associated with the {} interface. You should probably try both.\n'''.format(args.interface, ifh),
+                  '''that's often associated with the {} interface. The commands below include both variants.\n'''.format(args.interface, cookie_interface),
                   file=stderr)
-        print('''\nSAML response converted to OpenConnect command line invocation:\n''', file=stderr)
-        print(openconnect_command, file=stderr)
+        print('''\nSAML response converted to OpenConnect command line invocation{}:\n'''.format(
+            's' if len(attempts) > 1 else ''), file=stderr)
+        for attempt in attempts:
+            if len(attempts) > 1:
+                print('''    # Try the {} interface'''.format(attempt['interface']), file=stderr)
+            print(attempt['manual_command'], file=stderr)
+            if len(attempts) > 1:
+                print(file=stderr)
 
-        print('''\nSAML response converted to test-globalprotect-login.py invocation:\n''', file=stderr)
-        print('''    test-globalprotect-login.py --user={} --clientos={} -p '' \\\n         https://{}/{} {}={}\n'''.format(
-            quote(un), quote(args.clientos), quote(server), quote(if2auth[args.interface]), quote(cn), quote(cv)), file=stderr)
+        print('''\nSAML response converted to test-globalprotect-login.py invocation{}:\n'''.format(
+            's' if len(attempts) > 1 else ''), file=stderr)
+        for attempt in attempts:
+            if len(attempts) > 1:
+                print('''    # Try the {} interface'''.format(attempt['interface']), file=stderr)
+            print(attempt['test_command'], file=stderr)
+            if len(attempts) > 1:
+                print(file=stderr)
 
     if args.exec:
-        print('''Launching OpenConnect with {}, equivalent to:\n{}'''.format(args.exec, openconnect_command), file=stderr)
-        with tempfile.TemporaryFile('w+') as tf:
-            tf.write(cv)
-            tf.flush()
-            tf.seek(0)
-            # redirect stdin from this file, before it is closed by the context manager
-            # (it will remain accessible via the open file descriptor)
-            dup2(tf.fileno(), 0)
-        cmd = ["openconnect"] + openconnect_args
-        if args.exec == 'pkexec':
-            cmd = ["pkexec", "--user", "root"] + cmd
-        elif args.exec == 'sudo':
-            cmd = ["sudo"] + cmd
-        execvp(cmd[0], cmd)
+        if len(attempts) == 1:
+            print('''Launching OpenConnect with {}, equivalent to:\n{}'''.format(
+                args.exec, format_exec_command(args.exec, cv, attempts[0]['openconnect_args'])), file=stderr)
+            with tempfile.TemporaryFile('w+') as tf:
+                tf.write(cv)
+                tf.flush()
+                tf.seek(0)
+                # redirect stdin from this file, before it is closed by the context manager
+                # (it will remain accessible via the open file descriptor)
+                dup2(tf.fileno(), 0)
+            cmd = build_exec_command(args.exec, attempts[0]['openconnect_args'])
+            execvp(cmd[0], cmd)
 
-    else:
-        varvals = {
-            'HOST': quote('https://%s/%s' % (server, urlpath)),
-            'USER': quote(un), 'COOKIE': quote(cv), 'OS': quote(args.ocos),
-        }
-        print('\n'.join('%s=%s' % pair for pair in varvals.items()))
+        exit_status = 1
+        for index, attempt in enumerate(attempts, start=1):
+            print('''Launching OpenConnect attempt {}/{} with {}, equivalent to:\n{}'''.format(
+                index, len(attempts), args.exec,
+                format_exec_command(args.exec, cv, attempt['openconnect_args'])), file=stderr)
+            with tempfile.TemporaryFile('w+') as tf:
+                tf.write(cv)
+                tf.flush()
+                tf.seek(0)
+                exit_status = subprocess.call(build_exec_command(args.exec, attempt['openconnect_args']), stdin=tf)
+            if exit_status == 0:
+                raise SystemExit(0)
+            if index < len(attempts):
+                print('''OpenConnect exited with status {}. Trying the {} interface next.\n'''.format(
+                    exit_status, attempts[index]['interface']), file=stderr)
+        raise SystemExit(exit_status)
+
+    varvals = {
+        'HOST': quote('https://%s/%s' % (server, attempts[0]['urlpath'])),
+        'USER': quote(un), 'COOKIE': quote(cv), 'OS': quote(args.ocos),
+    }
+    print('\n'.join('%s=%s' % pair for pair in varvals.items()))
 
 if __name__ == "__main__":
     main()
