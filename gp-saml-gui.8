@@ -13,6 +13,7 @@ gp-saml-gui \- login to a GlobalProtect VPN that uses SAML authentication
 .OP --key KEY
 .OP -v
 .OP -q
+.OP --debug
 .OP -x
 .OP -P
 .OP -S
@@ -76,6 +77,10 @@ Increase verbosity of explanatory output to stderr
 .IP
 .B -q, --quiet
 Reduce verbosity to a minimum
+.IP
+.B --debug
+Enable pywebview debugging and open browser developer tools (disabled by default,
+independent of logging verbosity)
 .IP
 .B -x, --external
 Launch external browser (for debugging)

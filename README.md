@@ -144,6 +144,15 @@ If you specify either the `-P`/`--pkexec-openconnect` or `-S`/`--sudo-openconnec
 will automatically invoke OpenConnect as described, using either [`pkexec` from Polkit](https://www.freedesktop.org/software/polkit/docs/0.106/polkit.8.html)
 or [`sudo`](https://www.sudo.ws/), as specified.
 
+With pywebview, logging verbosity (`-v`) does not open developer tools. Use
+`--debug` to enable browser debugging and open DevTools explicitly.
+
+The UniTN helper (`bin/gp-saml-gui-unitn start`) authenticates directly to the
+gateway. Portal authentication can succeed while the gateway still requires a
+separate SAML login; a consumed portal cookie cannot be reused for that login.
+The helper obtains a fresh gateway cookie and passes it to OpenConnect using
+`--usergroup=gateway:prelogin-cookie`.
+
 # Extra Arguments to OpenConnect
 
 Extra arguments needed for OpenConnect can be specified by adding ` -- ` to the command line, and then

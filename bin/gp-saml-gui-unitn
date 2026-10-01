@@ -66,6 +66,7 @@ start_vpn() {
     cd "$REPO_DIR"
     "$python" gp_saml_gui.py \
         --pywebview \
+        --gateway \
         --clientos=Mac \
         --allow-insecure-crypto \
         "$VPN_HOST" \

@@ -35,3 +35,5 @@ jobs:
       run: |
         python -m py_compile gp_saml_gui.py
         python -m py_compile test-globalprotect-login.py
+    - name: Test authentication handoff and browser debugging
+      run: python -m unittest discover -s tests -v
