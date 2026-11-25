@@ -186,8 +186,8 @@ start_vpn() {
         --gateway \
         "--clientos=$CLIENTOS" \
         --allow-insecure-crypto \
-        "$VPN_HOST" \
         --sudo-openconnect \
+        "$VPN_HOST" \
         -- \
         --background \
         "--pid-file=$PID_FILE" \

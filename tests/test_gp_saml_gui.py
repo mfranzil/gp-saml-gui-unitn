@@ -36,7 +36,10 @@ class AuthenticationTests(unittest.TestCase):
         with patch.object(gui.requests, 'Session', return_value=self.session), \
                 patch.object(gui, 'SAMLLoginViewWebview', return_value=self.login), \
                 patch.object(gui, 'stderr', io.StringIO()), contextlib.redirect_stdout(output):
-            gui.main(['--pywebview', 'vpn.example.org'] + arguments)
+            # Options go before the server: argparse before Python 3.12 drops
+            # anything after '--' once an option follows the positionals.
+            split = arguments.index('--') if '--' in arguments else len(arguments)
+            gui.main(['--pywebview'] + arguments[:split] + ['vpn.example.org'] + arguments[split:])
         return output.getvalue()
 
     def test_cookie_is_bound_to_the_requested_interface(self):
