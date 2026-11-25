@@ -3,7 +3,7 @@
 If you have used the University of Trento VPN and hate closed software,
 you have probably suffered enough already.
 
-Enter `gp-saml-gui-unitn`. It connects to the UniTN. GlobalProtect VPN
+Enter `gp-saml-gui-unitn`. It connects to the UniTN GlobalProtect VPN
 (`vpn-mfa.icts.unitn.it`) with SAML sign-in and OpenConnect. It works on macOS;
 Linux support is written but still needs a spare soul that checks if I did not
 write weird stuff.
