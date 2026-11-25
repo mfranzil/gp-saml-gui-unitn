@@ -93,7 +93,8 @@ class BrowserDebugTests(unittest.TestCase):
 
 
 class UniTNLauncherTests(unittest.TestCase):
-    def run_launcher(self, *, clientos=None, python_as_command=False, vpnc_override=False):
+    def run_launcher(self, *, clientos=None, python_as_command=False, vpnc_override=False,
+                     system=None):
         launcher = Path(__file__).resolve().parents[1] / 'bin' / 'gp-saml-gui-unitn'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -112,6 +113,11 @@ class UniTNLauncherTests(unittest.TestCase):
             openconnect = fake_bin / 'openconnect'
             openconnect.write_text('#!/bin/sh\nexit 0\n')
             openconnect.chmod(0o755)
+
+            if system is not None:
+                uname = fake_bin / 'uname'
+                uname.write_text('#!/bin/sh\necho %s\n' % system)
+                uname.chmod(0o755)
 
             hip = root / 'hipreport.sh'
             hip.write_text('#!/bin/sh\nexit 0\n')
@@ -150,6 +156,8 @@ class UniTNLauncherTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             arguments = captured.read_text().splitlines()[1:]
             _, args = gui.parse_args(arguments)
+            self.state_dir = root / 'state' / 'gp-saml-gui'
+            self.real_hip = hip
             return args
 
     def test_start_preserves_known_good_mac_client_profile_by_default(self):
@@ -174,6 +182,19 @@ class UniTNLauncherTests(unittest.TestCase):
         script_arg = next(arg for arg in args.openconnect_extra if arg.startswith('--script='))
         self.assertIn('GP_SAML_GUI_VPNC_SCRIPT=', script_arg)
         self.assertIn('real vpnc-script', script_arg)
+
+    def csd_wrapper(self, args):
+        arg = next(arg for arg in args.openconnect_extra if arg.startswith('--csd-wrapper='))
+        return arg.split('=', 1)[1]
+
+    def test_mac_profile_reports_current_macos_version_off_macos(self):
+        args = self.run_launcher(system='Linux')
+        self.assertEqual(self.csd_wrapper(args), str(self.state_dir / 'hip' / 'hipreport.sh'))
+
+    def test_hip_report_is_used_directly_on_macos_and_for_linux_profile(self):
+        self.assertEqual(self.csd_wrapper(self.run_launcher(system='Darwin')), str(self.real_hip))
+        args = self.run_launcher(system='Linux', clientos='Linux')
+        self.assertEqual(self.csd_wrapper(args), str(self.real_hip))
 
 
 if __name__ == '__main__':

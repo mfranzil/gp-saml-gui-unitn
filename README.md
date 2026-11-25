@@ -4,9 +4,8 @@ If you have used the University of Trento VPN and hate closed software,
 you have probably suffered enough already.
 
 Enter `gp-saml-gui-unitn`. It connects to the UniTN GlobalProtect VPN
-(`vpn-mfa.icts.unitn.it`) with SAML sign-in and OpenConnect. It works on macOS;
-Linux support is written but still needs a spare soul that checks if I did not
-write weird stuff.
+(`vpn-mfa.icts.unitn.it`) with SAML sign-in and OpenConnect. It works on macOS
+and Linux.
 
 It is a fork of a fork:
 
@@ -65,6 +64,17 @@ python3 -m venv --system-site-packages .venv
 The Debian/Ubuntu `openconnect` package depends on `vpnc-scripts`, and recent
 packages install `hipreport.sh` under `/usr/libexec/openconnect`.
 
+### Arch and siblings
+
+```sh
+sudo pacman -S openconnect vpnc python python-gobject gtk3 webkit2gtk-4.1
+python3 -m venv --system-site-packages .venv
+.venv/bin/python3 -m pip install -r requirements-unitn.txt
+```
+
+`vpnc` provides `/etc/vpnc/vpnc-script`. Without `python-gobject` visible
+from the venv, pywebview cannot open the login window.
+
 ### Other Linux distributions
 
 Install OpenConnect, `vpnc-script`, GTK 3, WebKit2GTK and PyGObject with the
@@ -102,23 +112,53 @@ Without `GP_SAML_GUI_PYTHON`, the helper uses the first of `.venv/bin/python3`,
 contain `requests` and `pywebview`, else it will just catastrophically crash.
 
 The client OS defaults to `Mac` on Linux too, since that is the profile known
-to work; try `GP_SAML_GUI_CLIENTOS=Linux gp-saml-gui-unitn start` to check the
-alternative. If it works, contact me ASAP.
+to work (see the HIP report note below). `GP_SAML_GUI_CLIENTOS=Linux` is
+untested: when using it, OpenConnect's HIP report claims "Linux Fedora 32",
+an old version that the gateway likely bins as outdated.
 
 ## How it works
 
 - The helper authenticates directly to the gateway. Portal authentication can
   succeed while the gateway still requires a separate SAML login, and a
-  consumed portal cookie cannot be reused for it. Thus, the helper has to obtain a
-  fresh gateway cookie and passes it to OpenConnect with
+  consumed portal cookie cannot be reused for it. Thus, the helper has to
+  obtain a fresh gateway cookie and passes it to OpenConnect with
   `--usergroup=gateway:prelogin-cookie`.
-- It uses `--allow-insecure-crypto` (yeah...) for compatibility with the UniTN
-  endpoint.
 - OpenConnect runs in the background through `libexec/gp-saml-vpnc-script`,
-  which finds the system `vpnc-script`. On macOS it also applies some
-  workarounds for `/32` routes and DNS; these are not applied on Linux (yet).
-- `bin/` holds only the user-facing command; internal helpers live in
-  `libexec/`.
+  which finds the system `vpnc-script` and calls it.
+
+## Quirks and workarounds that were added
+
+- `--allow-insecure-crypto` (yeah...) is needed for compatibility with the
+  UniTN endpoint. Do not blame me.
+- With the `Mac` profile on Linux, OpenConnect's `hipreport.sh` cannot find
+  `sw_vers` and reports macOS 10.16.0. The gateway accepts that report but
+  only lets DNS through: the tunnel comes up, names resolve, and nothing else
+  answers. The helper therefore wraps `hipreport.sh` (in its state directory)
+  with a `sw_vers` that reports macOS 15.6.1.
+- On macOS, the vpnc-script wrapper drops `/32` netmasks that break routing
+  and sets the VPN DNS servers on the active network service.
+- On Linux without a running systemd-resolved (e.g. plain
+  `resolvconf`/openresolv), the vpnc-script wrapper saves `/etc/resolv.conf`
+  to `/run/gp-saml-gui/`, writes the UniTN DNS servers while connected, and
+  restores the original when `stop` is run.
+
+## What to do when something does not work
+
+- **Login window does not open (Linux).** pywebview cannot import PyGObject.
+  Install the distribution package (`python3-gi`, `python-gobject`, ...) and
+  create the venv with `--system-site-packages`.
+- **Tunnel works, DNS works, but nothing internal answers** (e.g.
+  `dig @10.100.252.99 examina.icts.unitn.it` works, `curl` to it times out).
+  The gateway has most likely rejected the HIP report and granted DNS-only
+  access. If `gp-saml-gui-unitn logs` shows `HIP report submitted successfully`,
+  UniTN probably raised the minimum macOS version: bump `15.6.1` in
+  `mac_hip_wrapper` (`bin/gp-saml-gui-unitn`) to a newer version. Also, open a
+  PR or an issue to update the wrapper for everyone. Will be appreciated.
+- **`/etc/resolv.conf` still points to UniTN after a crash** (Linux without
+  systemd-resolved). OpenConnect was killed before it could disconnect; the
+  original is in `/run/gp-saml-gui/resolv.conf`, so restore it with
+  `sudo cp -P /run/gp-saml-gui/resolv.conf /etc/resolv.conf`.
+  If you rebooted in the meantime, I cannot help you.
 
 ## The underlying gp-saml-gui
 
@@ -129,3 +169,10 @@ for general usage see the [upstream README][dlenski/gp-saml-gui].
 ## License
 
 GPLv3 or newer.
+
+## Thanks to
+
+- [Riccardo Germenia](https://github.com/odinmylord) for testing on Linux and
+  the `hipreport.sh` fix.
+- [dlenski](https://github.com/dlenski) for the original `gp-saml-gui`.
+- [lkrms](https://github.com/lkrms) for the pywebview fallback.

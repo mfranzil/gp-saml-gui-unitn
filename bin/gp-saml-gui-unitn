@@ -92,6 +92,23 @@ find_hip_script() {
     exit 1
 }
 
+# hipreport.sh reads the macOS version from sw_vers.
+# If not on macOS it falls back to
+# 10.16.0, and the gateway then admits the client with DNS-only access.
+# why this happens, I do not know. But macOS 10.16.0 is from 2020 and 
+# well past its end-of-life, so the gateway may have disabled it.
+# This wrapper just puts a sw_vers that reports a current version (15.6.1) instead.
+mac_hip_wrapper() {
+    local real="$1" dir="${STATE_DIR}/hip"
+
+    mkdir -p "$dir"
+    printf '#!/bin/sh\necho 15.6.1\n' > "${dir}/sw_vers"
+    printf '#!/bin/sh\nPATH=%s:"$PATH" exec %s "$@"\n' \
+        "$(shell_quote "$dir")" "$(shell_quote "$real")" > "${dir}/hipreport.sh"
+    chmod 755 "${dir}/sw_vers" "${dir}/hipreport.sh"
+    printf '%s\n' "${dir}/hipreport.sh"
+}
+
 shell_quote() {
     # OpenConnect executes --script as a /bin/sh command line.
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
@@ -166,6 +183,9 @@ start_vpn() {
     python="$(python_bin)"
     hip_script="$(find_hip_script)"
     validate_clientos
+    if [ "$CLIENTOS" = "Mac" ] && [ "$(uname -s)" != "Darwin" ]; then
+        hip_script="$(mac_hip_wrapper "$hip_script")"
+    fi
     check_runtime "$python"
 
     vpnc_script_cmd="$(shell_quote "$VPNC_SCRIPT")"
