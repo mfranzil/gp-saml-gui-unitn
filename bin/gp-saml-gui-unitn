@@ -4,10 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PID_FILE="${REPO_DIR}/gp-saml-gui.pid"
-LOG_FILE="${REPO_DIR}/gp-saml-gui.log"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/gp-saml-gui"
+PID_FILE="${STATE_DIR}/gp-saml-gui.pid"
+LOG_FILE="${STATE_DIR}/gp-saml-gui.log"
 PYTHON_BIN="${GP_SAML_GUI_PYTHON:-}"
-VPNC_SCRIPT="${SCRIPT_DIR}/gp-saml-vpnc-script"
+VPNC_SCRIPT="${REPO_DIR}/libexec/gp-saml-vpnc-script"
 HIP_SCRIPT="${GP_SAML_GUI_HIP_REPORT:-}"
 CLIENTOS="${GP_SAML_GUI_CLIENTOS:-Mac}"
 VPN_HOST="vpn-mfa.icts.unitn.it"
@@ -176,6 +177,7 @@ start_vpn() {
         vpnc_script_cmd="GP_SAML_GUI_VPNC_SCRIPT=$(shell_quote "$GP_SAML_GUI_VPNC_SCRIPT") $vpnc_script_cmd"
     fi
 
+    mkdir -p "$STATE_DIR"
     : > "$LOG_FILE"
 
     cd "$REPO_DIR"

@@ -117,7 +117,8 @@ class UniTNLauncherTests(unittest.TestCase):
             script = root / 'bin' / launcher.name
             script.write_text(launcher.read_text())
             script.chmod(0o755)
-            vpnc_wrapper = root / 'bin' / 'gp-saml-vpnc-script'
+            vpnc_wrapper = root / 'libexec' / 'gp-saml-vpnc-script'
+            vpnc_wrapper.parent.mkdir()
             vpnc_wrapper.write_text('#!/bin/sh\nexit 0\n')
             vpnc_wrapper.chmod(0o755)
 
@@ -128,7 +129,8 @@ class UniTNLauncherTests(unittest.TestCase):
                 GP_SAML_GUI_PYTHON='chosen-python' if python_as_command else str(python),
                 GP_SAML_GUI_HIP_REPORT=str(hip),
                 GP_TEST_ARGUMENTS=str(captured),
-                GP_TEST_PID_FILE=str(root / 'gp-saml-gui.pid'),
+                XDG_STATE_HOME=str(root / 'state'),
+                GP_TEST_PID_FILE=str(root / 'state' / 'gp-saml-gui' / 'gp-saml-gui.pid'),
             )
             if clientos is not None:
                 env['GP_SAML_GUI_CLIENTOS'] = clientos
