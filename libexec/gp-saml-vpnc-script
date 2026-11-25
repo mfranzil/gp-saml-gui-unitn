@@ -65,6 +65,23 @@ active_network_service() {
     '
 }
 
+# Both the system vpnc-script and apply_dns_fallback set the service's DNS
+# servers with networksetup, and the system script resets them to "Empty" on
+# disconnect. Save the service and its servers before either runs, and put them
+# back afterwards.
+DNS_BACKUP="/var/run/gp-saml-gui/dns"
+
+save_dns() {
+    [ ! -e "$DNS_BACKUP" ] || return 0
+    service="$(active_network_service || true)"
+    [ -n "${service:-}" ] || return 0
+    mkdir -p "$(dirname "$DNS_BACKUP")"
+    {
+        printf '%s\n' "$service"
+        /usr/sbin/networksetup -getdnsservers "$service" | grep -E '^[0-9a-fA-F:.]+$' || echo Empty
+    } >"$DNS_BACKUP"
+}
+
 apply_dns_fallback() {
     service="$(active_network_service || true)"
     if [ -n "${service:-}" ] && [ -n "${INTERNAL_IP4_DNS:-}" ]; then
@@ -72,7 +89,15 @@ apply_dns_fallback() {
     fi
 }
 
-# When systemd-resolved is not installed, vpnc-script with resolvconf leaves a
+restore_dns() {
+    [ -e "$DNS_BACKUP" ] || return 0
+    service="$(head -n 1 "$DNS_BACKUP")"
+    servers="$(tail -n +2 "$DNS_BACKUP")"
+    /usr/sbin/networksetup -setdnsservers "$service" ${servers} >/dev/null 2>&1 || true
+    rm -f "$DNS_BACKUP"
+}
+
+# When systemd-resolved is not running, vpnc-script with resolvconf leaves a
 # broken /etc/resolv.conf while connected and an empty one after disconnecting.
 # We keep a copy of the original, write the VPN servers directly, and restore it
 # on exit.
@@ -107,6 +132,11 @@ restore_resolv_conf() {
 }
 
 if [ "$(uname -s)" = "Darwin" ]; then
+    case "${reason:-}" in
+        connect)
+            save_dns || true
+            ;;
+    esac
     if [ "${INTERNAL_IP4_NETMASKLEN:-}" = "32" ] || [ "${INTERNAL_IP4_NETMASK:-}" = "255.255.255.255" ]; then
         unset INTERNAL_IP4_NETADDR INTERNAL_IP4_NETMASK INTERNAL_IP4_NETMASKLEN
     fi
@@ -119,6 +149,9 @@ if [ "$(uname -s)" = "Darwin" ]; then
     case "${reason:-}" in
         connect|reconnect|attempt-reconnect)
             apply_dns_fallback
+            ;;
+        disconnect)
+            restore_dns
             ;;
     esac
 elif ! uses_systemd_resolved; then

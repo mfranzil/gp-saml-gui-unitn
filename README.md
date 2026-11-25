@@ -116,30 +116,28 @@ to work (see the HIP report note below). `GP_SAML_GUI_CLIENTOS=Linux` is
 untested: when using it, OpenConnect's HIP report claims "Linux Fedora 32",
 an old version that the gateway likely bins as outdated.
 
-## How it works
+## Quirks and fixes
 
-- The helper authenticates directly to the gateway. Portal authentication can
-  succeed while the gateway still requires a separate SAML login, and a
-  consumed portal cookie cannot be reused for it. Thus, the helper has to
-  obtain a fresh gateway cookie and passes it to OpenConnect with
-  `--usergroup=gateway:prelogin-cookie`.
-- OpenConnect runs in the background through `libexec/gp-saml-vpnc-script`,
-  which finds the system `vpnc-script` and calls it.
-
-## Quirks and workarounds that were added
-
-- `--allow-insecure-crypto` (yeah...) is needed for compatibility with the
-  UniTN endpoint. Do not blame me.
-- With the `Mac` profile on Linux, OpenConnect's `hipreport.sh` cannot find
-  `sw_vers` and reports macOS 10.16.0. The gateway accepts that report but
-  only lets DNS through: the tunnel comes up, names resolve, and nothing else
-  answers. The helper therefore wraps `hipreport.sh` (in its state directory)
-  with a `sw_vers` that reports macOS 15.6.1.
-- On macOS, the vpnc-script wrapper drops `/32` netmasks that break routing
-  and sets the VPN DNS servers on the active network service.
-- On Linux without a running systemd-resolved (e.g. plain
-  `resolvconf`/openresolv), the vpnc-script wrapper saves `/etc/resolv.conf`
-  to `/run/gp-saml-gui/`, writes the UniTN DNS servers while connected, and
+- **Gateway login.** Signing in to the portal is not enough: the gateway asks for
+  its own SAML login, and the portal cookie is already spent by then. The helper
+  therefore authenticates directly to the gateway and passes that cookie to
+  OpenConnect with `--usergroup=gateway:prelogin-cookie`. Why the gateway behaves
+  this way is unknown.
+- **Insecure crypto.** `--allow-insecure-crypto` (yeah...) is needed for
+  compatibility with the UniTN endpoint. Do not blame me.
+- **HIP report on Linux.** With the `Mac` profile on Linux, OpenConnect's
+  `hipreport.sh` cannot find `sw_vers` and reports macOS 10.16.0. The gateway
+  accepts that report but only lets DNS through: the tunnel comes up, DNS works,
+  but internal hosts do not answer. The helper has to wrap `hipreport.sh` with a
+  `sw_vers` that reports macOS 15.6.1.
+- **Routes and DNS on macOS.** OpenConnect calls the system `vpnc-script`
+  through `libexec/gp-saml-vpnc-script`, which drops the `/32` netmask that
+  breaks routing and sets the UniTN DNS servers on the active network service.
+  The previous servers are saved in `/var/run/gp-saml-gui/` and restored when
+  `stop` is run.
+- **DNS on Linux without systemd-resolved** (e.g. plain
+  `resolvconf`/openresolv). The same wrapper saves `/etc/resolv.conf` to
+  `/run/gp-saml-gui/`, writes the UniTN DNS servers while connected, and
   restores the original when `stop` is run.
 
 ## What to do when something does not work
@@ -154,11 +152,14 @@ an old version that the gateway likely bins as outdated.
   UniTN probably raised the minimum macOS version: bump `15.6.1` in
   `mac_hip_wrapper` (`bin/gp-saml-gui-unitn`) to a newer version. Also, open a
   PR or an issue to update the wrapper for everyone. Will be appreciated.
-- **`/etc/resolv.conf` still points to UniTN after a crash** (Linux without
-  systemd-resolved). OpenConnect was killed before it could disconnect; the
-  original is in `/run/gp-saml-gui/resolv.conf`, so restore it with
-  `sudo cp -P /run/gp-saml-gui/resolv.conf /etc/resolv.conf`.
-  If you rebooted in the meantime, I cannot help you.
+- **DNS still points to UniTN after a crash.** OpenConnect was killed before
+  it could disconnect, so the saved settings were not restored.
+  - On Linux without systemd-resolved, run `sudo cp -P
+    /run/gp-saml-gui/resolv.conf /etc/resolv.conf` (remember that `/run` is
+    tmpfs and will be empty after a reboot).
+  - On macOS, the first line of `/var/run/gp-saml-gui/dns` is the network
+    service and the rest are its previous servers: pass them to `networksetup
+    -setdnsservers` (`Empty` if there were none).
 
 ## The underlying gp-saml-gui
 
