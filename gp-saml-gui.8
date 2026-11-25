@@ -14,6 +14,10 @@ gp-saml-gui \- login to a GlobalProtect VPN that uses SAML authentication
 .OP -v
 .OP -q
 .OP --debug
+.OP -w
+.OP --allow-insecure-crypto
+.OP --user-agent USER_AGENT
+.OP --no-proxy
 .OP -x
 .OP -P
 .OP -S
@@ -51,7 +55,7 @@ so that they are not parsed as gp-saml-gui's own options).
 .TP
 .I Optional arguments
 .IP
-.B --h, --help
+.B -h, --help
 Show help message and exit
 .IP
 .B --no-verify
@@ -81,6 +85,18 @@ Reduce verbosity to a minimum
 .B --debug
 Enable pywebview debugging and open browser developer tools (disabled by default,
 independent of logging verbosity)
+.IP
+.B -w, --pywebview
+Use pywebview instead of WebKit2-GTK
+.IP
+.B --allow-insecure-crypto
+Allow legacy TLS cryptography for compatibility
+.IP
+.B --user-agent, --useragent
+Set the user agent (default: PAN GlobalProtect)
+.IP
+.B --no-proxy
+Disable system proxy settings
 .IP
 .B -x, --external
 Launch external browser (for debugging)

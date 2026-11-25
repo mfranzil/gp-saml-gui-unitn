@@ -90,39 +90,85 @@ class BrowserDebugTests(unittest.TestCase):
 
 
 class UniTNLauncherTests(unittest.TestCase):
-    def test_start_requests_a_gateway_cookie_without_devtools(self):
-        # Exercise the shell launcher without opening a login window or VPN.
+    def run_launcher(self, *, clientos=None, python_as_command=False, vpnc_override=False):
         launcher = Path(__file__).resolve().parents[1] / 'bin' / 'gp-saml-gui-unitn'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'bin').mkdir()
-            python = root / '.direnv' / 'test' / 'bin' / 'python3'
-            python.parent.mkdir(parents=True)
+            fake_bin = root / 'fake-bin'
+            fake_bin.mkdir()
+
+            python = fake_bin / ('chosen-python' if python_as_command else 'python3')
             python.write_text(
                 '#!/bin/sh\n'
+                'if [ "${1:-}" = "-" ]; then cat >/dev/null; exit 0; fi\n'
                 'printf "%s\\n" "$@" > "$GP_TEST_ARGUMENTS"\n'
                 'printf "%s\\n" "$$" > "$GP_TEST_PID_FILE"\n')
             python.chmod(0o755)
+
+            openconnect = fake_bin / 'openconnect'
+            openconnect.write_text('#!/bin/sh\nexit 0\n')
+            openconnect.chmod(0o755)
+
             hip = root / 'hipreport.sh'
             hip.write_text('#!/bin/sh\nexit 0\n')
             hip.chmod(0o755)
+
             script = root / 'bin' / launcher.name
-            script.write_text(launcher.read_text().replace(
-                '/opt/homebrew/opt/openconnect/libexec/openconnect/hipreport.sh', str(hip)))
+            script.write_text(launcher.read_text())
+            script.chmod(0o755)
+            vpnc_wrapper = root / 'bin' / 'gp-saml-vpnc-script'
+            vpnc_wrapper.write_text('#!/bin/sh\nexit 0\n')
+            vpnc_wrapper.chmod(0o755)
+
             captured = root / 'arguments'
+            env = dict(
+                os.environ,
+                PATH=str(fake_bin) + os.pathsep + os.environ.get('PATH', ''),
+                GP_SAML_GUI_PYTHON='chosen-python' if python_as_command else str(python),
+                GP_SAML_GUI_HIP_REPORT=str(hip),
+                GP_TEST_ARGUMENTS=str(captured),
+                GP_TEST_PID_FILE=str(root / 'gp-saml-gui.pid'),
+            )
+            if clientos is not None:
+                env['GP_SAML_GUI_CLIENTOS'] = clientos
+            if vpnc_override:
+                real_vpnc = root / 'real vpnc-script'
+                real_vpnc.write_text('#!/bin/sh\nexit 0\n')
+                real_vpnc.chmod(0o755)
+                env['GP_SAML_GUI_VPNC_SCRIPT'] = str(real_vpnc)
+
             result = subprocess.run(
                 ['bash', str(script), 'start'], stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
-                env=dict(os.environ, GP_TEST_ARGUMENTS=str(captured),
-                         GP_TEST_PID_FILE=str(root / 'gp-saml-gui.pid')),
-                timeout=10)
+                env=env, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
-            _, args = gui.parse_args(captured.read_text().splitlines()[1:])
-            self.assertEqual(args.server, 'vpn-mfa.icts.unitn.it')
-            self.assertEqual(args.interface, 'gateway')
-            self.assertEqual(args.exec, 'sudo')
-            self.assertFalse(args.debug)
-            self.assertIn('--background', args.openconnect_extra)
+            arguments = captured.read_text().splitlines()[1:]
+            _, args = gui.parse_args(arguments)
+            return args
+
+    def test_start_preserves_known_good_mac_client_profile_by_default(self):
+        args = self.run_launcher()
+        self.assertEqual(args.server, 'vpn-mfa.icts.unitn.it')
+        self.assertEqual(args.interface, 'gateway')
+        self.assertEqual(args.exec, 'sudo')
+        self.assertEqual(args.clientos, 'Mac')
+        self.assertFalse(args.debug)
+        self.assertIn('--background', args.openconnect_extra)
+
+    def test_client_profile_can_be_overridden_for_linux(self):
+        args = self.run_launcher(clientos='Linux')
+        self.assertEqual(args.clientos, 'Linux')
+
+    def test_python_can_be_supplied_as_a_command_name(self):
+        args = self.run_launcher(python_as_command=True)
+        self.assertEqual(args.clientos, 'Mac')
+
+    def test_vpnc_override_is_embedded_in_openconnect_script_command(self):
+        args = self.run_launcher(vpnc_override=True)
+        script_arg = next(arg for arg in args.openconnect_extra if arg.startswith('--script='))
+        self.assertIn('GP_SAML_GUI_VPNC_SCRIPT=', script_arg)
+        self.assertIn('real vpnc-script', script_arg)
 
 
 if __name__ == '__main__':

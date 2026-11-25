@@ -1,0 +1,5 @@
+# Known-good top-level Python dependencies for the UniTN helper.
+# Platform-specific transitive dependencies (PyObjC on macOS, GTK bindings on
+# Linux) are resolved by pywebview or installed by the OS as described in README.
+requests==2.34.2
+pywebview==6.2.1

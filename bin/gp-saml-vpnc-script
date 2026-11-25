@@ -2,7 +2,52 @@
 
 set -eu
 
-REAL_VPNC_SCRIPT="/opt/homebrew/etc/vpnc/vpnc-script"
+find_vpnc_script() {
+    candidate="${GP_SAML_GUI_VPNC_SCRIPT:-}"
+    if [ -n "$candidate" ]; then
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+        echo "Configured vpnc-script is not executable: $candidate" >&2
+        exit 1
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        for brew in "$(command -v brew 2>/dev/null || true)" /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [ -x "$brew" ]; then
+                brew_prefix="$("$brew" --prefix 2>/dev/null || true)"
+                candidate="${brew_prefix}/etc/vpnc/vpnc-script"
+                if [ -n "$brew_prefix" ] && [ -x "$candidate" ]; then
+                    printf '%s\n' "$candidate"
+                    return
+                fi
+            fi
+        done
+        for candidate in /opt/homebrew/etc/vpnc/vpnc-script /usr/local/etc/vpnc/vpnc-script; do
+            if [ -x "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return
+            fi
+        done
+    else
+        for candidate in /etc/vpnc/vpnc-script /usr/share/vpnc-scripts/vpnc-script /usr/share/vpnc/vpnc-script; do
+            if [ -x "$candidate" ]; then
+                printf '%s\n' "$candidate"
+                return
+            fi
+        done
+        if command -v vpnc-script >/dev/null 2>&1; then
+            command -v vpnc-script
+            return
+        fi
+    fi
+
+    echo "Cannot find executable vpnc-script." >&2
+    exit 1
+}
+
+REAL_VPNC_SCRIPT="$(find_vpnc_script)"
 
 active_network_service() {
     active_interface="$(route -n get default 2>/dev/null | awk '/interface:/{print $2; exit}')"

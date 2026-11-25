@@ -3,3 +3,6 @@ __pycache__
 nohup.*
 .direnv
 gp-saml-gui.log
+.venv
+.DS_Store
+gp-saml-gui.pid

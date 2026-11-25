@@ -6,24 +6,130 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PID_FILE="${REPO_DIR}/gp-saml-gui.pid"
 LOG_FILE="${REPO_DIR}/gp-saml-gui.log"
-PYTHON_GLOB=("${REPO_DIR}"/.direnv/*/bin/python3)
+PYTHON_BIN="${GP_SAML_GUI_PYTHON:-}"
 VPNC_SCRIPT="${SCRIPT_DIR}/gp-saml-vpnc-script"
-HIP_SCRIPT="/opt/homebrew/opt/openconnect/libexec/openconnect/hipreport.sh"
+HIP_SCRIPT="${GP_SAML_GUI_HIP_REPORT:-}"
+CLIENTOS="${GP_SAML_GUI_CLIENTOS:-Mac}"
 VPN_HOST="vpn-mfa.icts.unitn.it"
 
 usage() {
-    cat <<'EOF'
+    cat <<'EOF_USAGE'
 Usage: gp-saml-gui-unitn {start|stop|status|restart|logs}
-EOF
+
+Optional environment variables:
+  GP_SAML_GUI_PYTHON       Python executable or command
+  GP_SAML_GUI_HIP_REPORT   path to OpenConnect hipreport.sh
+  GP_SAML_GUI_VPNC_SCRIPT  path to the real vpnc-script
+  GP_SAML_GUI_CLIENTOS     GlobalProtect client OS (Mac, Linux, Windows; default: Mac)
+EOF_USAGE
 }
 
 python_bin() {
-    if [ ${#PYTHON_GLOB[@]} -eq 0 ] || [ ! -x "${PYTHON_GLOB[0]}" ]; then
-        echo "Missing Python virtual environment under ${REPO_DIR}/.direnv" >&2
+    local candidate
+
+    if [ -n "$PYTHON_BIN" ]; then
+        if [ -x "$PYTHON_BIN" ]; then
+            printf '%s\n' "$PYTHON_BIN"
+            return
+        fi
+        if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+            command -v "$PYTHON_BIN"
+            return
+        fi
+        echo "Python executable is not usable: $PYTHON_BIN" >&2
         exit 1
     fi
 
-    printf '%s\n' "${PYTHON_GLOB[0]}"
+    for candidate in "${REPO_DIR}/.venv/bin/python3" "${REPO_DIR}"/.direnv/*/bin/python3; do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done
+    if command -v python3 >/dev/null 2>&1; then
+        command -v python3
+        return
+    fi
+    echo "Python 3 not found. Set GP_SAML_GUI_PYTHON to its executable path or command." >&2
+    exit 1
+}
+
+find_hip_script() {
+    local candidate brew brew_prefix
+
+    if [ -n "$HIP_SCRIPT" ]; then
+        [ -x "$HIP_SCRIPT" ] && { printf '%s\n' "$HIP_SCRIPT"; return; }
+        echo "HIP helper is not executable: $HIP_SCRIPT" >&2
+        exit 1
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        for brew in "$(command -v brew 2>/dev/null || true)" /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [ -n "$brew" ] && [ -x "$brew" ]; then
+                brew_prefix="$("$brew" --prefix openconnect 2>/dev/null || true)"
+                candidate="${brew_prefix}/libexec/openconnect/hipreport.sh"
+                if [ -n "$brew_prefix" ] && [ -x "$candidate" ]; then
+                    printf '%s\n' "$candidate"
+                    return
+                fi
+            fi
+        done
+    fi
+
+    for candidate in \
+            /opt/homebrew/opt/openconnect/libexec/openconnect/hipreport.sh \
+            /usr/local/opt/openconnect/libexec/openconnect/hipreport.sh \
+            /usr/libexec/openconnect/hipreport.sh \
+            /usr/lib/openconnect/hipreport.sh; do
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done
+
+    echo "Cannot find OpenConnect hipreport.sh; set GP_SAML_GUI_HIP_REPORT." >&2
+    exit 1
+}
+
+shell_quote() {
+    # OpenConnect executes --script as a /bin/sh command line.
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+check_runtime() {
+    local python="$1"
+
+    if ! command -v openconnect >/dev/null 2>&1; then
+        echo "OpenConnect not found in PATH." >&2
+        exit 1
+    fi
+
+    if ! "$python" - <<'PY' >/dev/null 2>&1
+import sys
+if sys.version_info < (3, 8):
+    raise SystemExit(1)
+import requests
+import webview
+PY
+    then
+        cat >&2 <<'EOF_ERROR'
+Python is missing the UniTN helper runtime dependencies (Python >= 3.8,
+requests and pywebview). Follow the UniTN installation section in README.md
+or select another environment with GP_SAML_GUI_PYTHON.
+EOF_ERROR
+        exit 1
+    fi
+}
+
+validate_clientos() {
+    case "$CLIENTOS" in
+        Mac|Linux|Windows)
+            ;;
+        *)
+            echo "Invalid GP_SAML_GUI_CLIENTOS: $CLIENTOS (expected Mac, Linux, or Windows)" >&2
+            exit 1
+            ;;
+    esac
 }
 
 read_pid() {
@@ -48,7 +154,7 @@ clear_stale_pid() {
 }
 
 start_vpn() {
-    local python
+    local python hip_script vpnc_script_cmd
 
     clear_stale_pid
     if is_running; then
@@ -57,25 +163,34 @@ start_vpn() {
     fi
 
     python="$(python_bin)"
-    if [ ! -x "$HIP_SCRIPT" ]; then
-        echo "Missing HIP helper: $HIP_SCRIPT" >&2
-        exit 1
+    hip_script="$(find_hip_script)"
+    validate_clientos
+    check_runtime "$python"
+
+    vpnc_script_cmd="$(shell_quote "$VPNC_SCRIPT")"
+    if [ -n "${GP_SAML_GUI_VPNC_SCRIPT:-}" ]; then
+        if [ ! -x "$GP_SAML_GUI_VPNC_SCRIPT" ]; then
+            echo "vpnc-script is not executable: $GP_SAML_GUI_VPNC_SCRIPT" >&2
+            exit 1
+        fi
+        vpnc_script_cmd="GP_SAML_GUI_VPNC_SCRIPT=$(shell_quote "$GP_SAML_GUI_VPNC_SCRIPT") $vpnc_script_cmd"
     fi
+
     : > "$LOG_FILE"
 
     cd "$REPO_DIR"
     "$python" gp_saml_gui.py \
         --pywebview \
         --gateway \
-        --clientos=Mac \
+        "--clientos=$CLIENTOS" \
         --allow-insecure-crypto \
         "$VPN_HOST" \
         --sudo-openconnect \
         -- \
         --background \
         "--pid-file=$PID_FILE" \
-        "--script=$VPNC_SCRIPT" \
-        "--csd-wrapper=$HIP_SCRIPT" \
+        "--script=$vpnc_script_cmd" \
+        "--csd-wrapper=$hip_script" \
         >> "$LOG_FILE" 2>&1
 
     echo "gp-saml-gui started with PID $(read_pid)"
